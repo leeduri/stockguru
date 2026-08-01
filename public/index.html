@@ -163,6 +163,92 @@
   </footer>
 </div>
 
+<!-- 종목 상세 — 표에서 종목을 누르면 열린다. 주소에 #005930 이 붙어 링크·뒤로가기가 된다 -->
+<div class="overlay" id="detail" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="dTitle">
+
+    <header class="sheet-head">
+      <div class="sheet-id">
+        <h2 id="dTitle">—</h2>
+        <div class="sub" id="dSub"></div>
+      </div>
+      <div class="sheet-price">
+        <div class="value" id="dPrice">—</div>
+        <div class="delta" id="dDelta"></div>
+      </div>
+      <button class="btn close" id="dClose" type="button" aria-label="닫기">✕</button>
+    </header>
+
+    <div class="sheet-body" id="dBody">
+
+      <section class="d-sec" id="dChartSec">
+        <div class="d-head">
+          <h3>주가 흐름</h3>
+          <span class="sub" id="dChartSub"></span>
+          <div class="spacer"></div>
+          <div class="seg small" role="group" aria-label="차트 기간">
+            <button type="button" data-range="20" aria-pressed="false">1개월</button>
+            <button type="button" data-range="60" aria-pressed="true">3개월</button>
+            <button type="button" data-range="120" aria-pressed="false">6개월</button>
+            <button type="button" data-range="0" aria-pressed="false">전체</button>
+          </div>
+        </div>
+        <div class="chart-box" id="dChart"></div>
+        <p class="hint" id="dChartNote" hidden></p>
+      </section>
+
+      <section class="d-sec" id="dMeterSec">
+        <div class="d-head"><h3>52주 위치</h3><span class="sub" id="dMeterSub"></span></div>
+        <div class="meter" id="dMeter"></div>
+      </section>
+
+      <section class="d-sec" id="dIndSec">
+        <div class="d-head"><h3>지표</h3><span class="sub">전일 종가 기준 · 네이버 금융 제공</span></div>
+        <div class="ind-grid" id="dInd"></div>
+      </section>
+
+      <section class="d-sec" id="dFlowSec">
+        <div class="d-head"><h3>수급</h3><span class="sub" id="dFlowSub"></span></div>
+        <div class="ind-grid" id="dFlow"></div>
+      </section>
+
+      <section class="d-sec" id="dThemeSec">
+        <div class="d-head">
+          <h3>소속 테마</h3>
+          <span class="sub" id="dThemeSub"></span>
+        </div>
+        <div class="chips" id="dChips"></div>
+
+        <div class="d-head" style="margin-top:16px">
+          <h3 id="dWeightTitle">테마 내 비중</h3>
+          <span class="sub" id="dWeightSub"></span>
+        </div>
+        <div class="card">
+          <div class="scroll">
+            <table class="weight-tbl">
+              <caption class="sr-only">선택한 테마의 구성종목과 이 종목이 차지하는 비중</caption>
+              <thead>
+                <tr>
+                  <th scope="col">#</th>
+                  <th scope="col">종목</th>
+                  <th scope="col">등락률</th>
+                  <th scope="col">현재가</th>
+                  <th scope="col">시가총액</th>
+                  <th scope="col" class="c-key">시총 비중</th>
+                  <th scope="col">거래대금</th>
+                  <th scope="col" class="c-key">거래대금 비중</th>
+                </tr>
+              </thead>
+              <tbody id="dWeight"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
 <div id="tip" role="tooltip" aria-hidden="true"></div>
 <script src="app.js"></script>
 </body>

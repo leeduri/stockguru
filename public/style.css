@@ -89,6 +89,11 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 속성은 브라우저 기본 display:none 으로 동작하는데, 클래스에 display 를
+   주는 순간 그 규칙이 이겨서 무력화된다(.overlay, .filters, .heat 가 그랬다).
+   숨김은 언제나 이기도록 못박는다. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--plane);
@@ -577,6 +582,237 @@ td.c-rate { padding-right: 12px; }
 #tip[data-show="1"] { opacity: 1; }
 #tip .t-nm { font-weight: 650; margin-bottom: 2px; }
 #tip .t-row { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ---------- 종목 상세 시트 ---------- */
+
+tbody td.name .name-btn {
+  font: inherit;
+  font-weight: 550;
+  color: var(--text-primary);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  border-bottom: 1px solid transparent;
+}
+tbody tr:hover .name-btn { border-bottom-color: var(--axis); }
+.name-btn:focus-visible { outline: 2px solid var(--dn-2); outline-offset: 2px; }
+tbody tr { cursor: pointer; }
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sheet {
+  background: var(--plane);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: min(980px, 100%);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.sheet-head {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 56px 18px 20px;   /* 오른쪽은 닫기 버튼 자리 */
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--gridline);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex-wrap: wrap;
+}
+.sheet-id { flex: 1 1 200px; min-width: 0; }
+.sheet-id h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.sheet-id .sub {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sheet-price { text-align: right; flex: none; }
+.sheet-price .value {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.sheet-price .delta { font-size: 14px; margin-top: 2px; }
+/* 좁은 화면에서 줄바꿈에 휩쓸려 현재가 옆에 끼지 않도록 모서리에 고정한다 */
+.btn.close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 6px 10px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.sheet-body { padding: 4px 20px 24px; }
+
+.d-sec { margin-top: 24px; }
+.d-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.d-head h3 { margin: 0; font-size: 15px; font-weight: 650; }
+.d-head .sub { font-size: 12.5px; color: var(--text-muted); }
+.d-head .spacer { flex: 1 1 auto; }
+.seg.small button { font-size: 12.5px; padding: 5px 10px; min-height: 28px; }
+
+/* 차트 — 컨테이너 높이에 x축 라벨 띠까지 포함시켜 안쪽 스크롤이 생기지 않게 한다 */
+.chart-box {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 8px 6px;
+}
+.chart-box svg { display: block; width: 100%; height: auto; }
+.grid-line { stroke: var(--gridline); stroke-width: 1; }
+.axis-line { stroke: var(--axis); stroke-width: 1; }
+.tick-txt { fill: var(--text-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.price-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.price-area { stroke: none; opacity: 0.1; }
+.cross-line { stroke: var(--axis); stroke-width: 1; }
+.cross-dot { stroke: var(--surface-1); stroke-width: 2; }
+.end-dot { stroke: var(--surface-1); stroke-width: 2; }
+.end-label { font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.hit { fill: transparent; }
+
+/* 52주 위치 미터 — 채움은 같은 램프의 진한 스텝, 트랙은 옅은 스텝 */
+.meter {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px 18px 14px;
+}
+.meter-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--wash);
+}
+.meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 5px 0 0 5px;
+}
+.meter-mark {
+  position: absolute;
+  top: -5px;
+  width: 4px;
+  height: 20px;
+  border-radius: 2px;
+  transform: translateX(-2px);
+  box-shadow: 0 0 0 2px var(--surface-1);
+}
+.meter-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.meter-ends b { color: var(--text-primary); font-weight: 600; display: block; }
+.meter-now {
+  position: absolute;
+  top: -22px;
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+/* 지표 격자 */
+.ind-grid {
+  display: grid;
+  /* auto-fit: 항목이 열 수보다 적으면 빈 트랙을 접어, 끝에 빈 칸이 남지 않게 한다 */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--gridline);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.ind {
+  background: var(--surface-1);
+  padding: 11px 13px;
+}
+.ind .k { font-size: 12px; color: var(--text-muted); }
+.ind .v {
+  font-size: 14.5px;
+  font-weight: 600;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 테마 칩 */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font: inherit;
+  font-size: 12.5px;
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+}
+.chip:hover { background: var(--wash); }
+.chip[aria-pressed="true"] {
+  background: var(--text-primary);
+  color: var(--surface-1);
+  border-color: var(--text-primary);
+}
+.chip:focus-visible { outline: 2px solid var(--dn-2); outline-offset: 2px; }
+.chip .r { font-variant-numeric: tabular-nums; font-weight: 650; }
+.chip[aria-pressed="true"] .r { color: inherit; }
+
+/* 비중 표 */
+.weight-tbl .share {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.weight-tbl .share .n { min-width: 48px; text-align: right; font-weight: 620; }
+.weight-tbl tr.self { background: var(--wash); }
+.weight-tbl tr.self td.name .nm { font-weight: 700; }
+.weight-tbl tr.self td.name::after {
+  content: '지금 보는 종목';
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
 
 /* ---------- 상태 ---------- */
 

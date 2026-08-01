@@ -47,6 +47,26 @@ const num = (v) => {
 const MARKETS = ['KOSPI', 'KOSDAQ'];
 const TYPE_CODE = { stock: 0, etf: 1, etn: 2 };
 
+/** 동시 실행 개수를 제한해 순회한다 */
+async function pool(items, size, fn) {
+  const queue = [...items];
+  const out = [];
+  await Promise.all(
+    Array.from({ length: size }, async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        try {
+          const r = await fn(item);
+          if (r != null) out.push(r);
+        } catch {
+          /* 개별 실패는 건너뛴다 — 부가 정보가 전체 수집을 막지 않도록 */
+        }
+      }
+    }),
+  );
+  return out;
+}
+
 /** 한 시장의 전 종목을 시가총액 순으로 훑어 가져온다 (ETF·ETN 포함) */
 async function fetchMarket(market) {
   const rows = [];
@@ -63,6 +83,9 @@ async function fetchMarket(market) {
     const rate = num(s.fluctuationsRatio) ?? 0;
     // 등락 부호는 fluctuationsRatio 가 이미 갖고 있고, 전일대비 절대값에 그 부호를 씌운다
     const absChg = num(s.compareToPreviousClosePriceRaw ?? s.compareToPreviousClosePrice) ?? 0;
+    // 상한가·하한가는 등락률로 어림잡지 않고 원본이 주는 플래그를 그대로 쓴다
+    const mark = s.compareToPreviousPrice?.name;
+    const limitFlag = mark === 'UPPER_LIMIT' ? 1 : mark === 'LOWER_LIMIT' ? -1 : 0;
     return [
       s.itemCode,                                        // 0 종목코드
       s.stockName,                                       // 1 종목명
@@ -75,7 +98,102 @@ async function fetchMarket(market) {
       // Raw 필드는 원 단위, 표시용 문자열은 각각 백만원/억원 단위라 폴백에서 환산한다
       num(s.accumulatedTradingValueRaw) ?? (num(s.accumulatedTradingValue) ?? 0) * 1e6, // 8 거래대금 (원)
       num(s.marketValueRaw) ?? (num(s.marketValue) ?? 0) * 1e8,              // 9 시가총액 (원)
+      limitFlag,                                         // 10 상한 1 / 하한 -1 / 없음 0
     ];
+  });
+}
+
+/**
+ * 테마별 구성종목. 테마 하나당 요청 하나(구성종목이 100개를 넘으면 더) 라
+ * 266개를 동시 8개로 돌면 4초 남짓이다.
+ */
+async function fetchThemeGroups() {
+  const groups = [];
+  for (let page = 1; page <= 20; page++) {
+    const j = await getJSON(`https://m.stock.naver.com/api/stocks/theme?page=${page}&pageSize=50`);
+    const list = j.groups ?? [];
+    groups.push(...list);
+    if (list.length < 50) break;
+    await sleep(120);
+  }
+
+  return pool(groups, 8, async (g) => {
+    const codes = [];
+    for (let page = 1; page <= 10; page++) {
+      const j = await getJSON(`https://m.stock.naver.com/api/stocks/theme/${g.no}?page=${page}&pageSize=100`, 2);
+      const list = j.stocks ?? [];
+      codes.push(...list.map((s) => s.itemCode));
+      if (list.length < 100) break;
+    }
+    return {
+      no: g.no,
+      name: g.name,
+      rate: num(g.changeRate) ?? 0,
+      up: g.riseCount ?? 0,
+      down: g.fallCount ?? 0,
+      flat: g.steadyCount ?? 0,
+      codes,
+    };
+  });
+}
+
+/** 상세를 받아 둘 종목 — 사용자가 순위표에서 실제로 누를 만한 것들의 합집합 */
+function detailUniverse(rows) {
+  const stocks = rows.filter((r) => r[3] === 0);
+  const byDesc = (i) => [...stocks].sort((a, b) => b[i] - a[i]);
+  const set = new Set();
+  const take = (list, n) => list.slice(0, n).forEach((r) => set.add(r[0]));
+  take(byDesc(8), 500);                                              // 거래대금
+  take(byDesc(9), 200);                                              // 시가총액
+  take(byDesc(6), 200);                                              // 상승률
+  take([...stocks].sort((a, b) => a[6] - b[6]), 200);                // 하락률
+  return [...set];
+}
+
+/** siseJson 은 작은따옴표를 쓰는 유사 JSON 이라 손질해서 파싱한다 */
+function parseSiseJson(text) {
+  const cleaned = text.replace(/'/g, '"').replace(/,\s*]/g, ']');
+  const rows = JSON.parse(cleaned);
+  return rows.slice(1)                                   // 첫 줄은 헤더
+    .filter((r) => Array.isArray(r) && r.length >= 6)
+    .map((r) => [String(r[0]), r[1], r[2], r[3], r[4], r[5]]);  // 날짜, 시가, 고가, 저가, 종가, 거래량
+}
+
+const KST_DATE = (offsetDays = 0) => {
+  const d = new Date(Date.now() + 9 * 3600_000 - offsetDays * 86400_000);
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+};
+
+/**
+ * 종목 상세 — 지표(integration)와 일봉(siseJson). 종목마다 요청 두 개라
+ * 전 종목은 무리고, 위 universe 만 받는다.
+ */
+async function fetchDetails(codes, nameByCode) {
+  const start = KST_DATE(260);   // 영업일 기준 대략 6개월치
+  const end = KST_DATE(0);
+
+  return pool(codes, 8, async (code) => {
+    const [info, chartText] = await Promise.all([
+      getJSON(`https://m.stock.naver.com/api/stock/${code}/integration`, 2),
+      fetch(
+        `https://api.finance.naver.com/siseJson.naver?symbol=${code}&requestType=1&startTime=${start}&endTime=${end}&timeframe=day`,
+        { headers: HEADERS, signal: AbortSignal.timeout(20_000) },
+      ).then((r) => (r.ok ? r.text() : null)).catch(() => null),
+    ]);
+
+    const indicators = {};
+    for (const t of info?.totalInfos ?? []) indicators[t.code] = { key: t.key, value: t.value };
+
+    let chart = [];
+    if (chartText) { try { chart = parseSiseJson(chartText); } catch { chart = []; } }
+
+    return {
+      code,
+      name: nameByCode.get(code) ?? info?.stockName ?? code,
+      indicators,
+      chartCols: ['date', 'open', 'high', 'low', 'close', 'volume'],
+      chart,
+    };
   });
 }
 
@@ -181,9 +299,6 @@ async function fetchFlows(rows) {
   return out;
 }
 
-/** 상한가 판정 임계값. 호가 단위 때문에 +30.00%에 못 미치는 경우가 있어 여유를 둔다 */
-const LIMIT = 29.5;
-
 /** 시장 폭 — 지수 숫자만으로는 안 보이는 체감 장세 */
 function breadth(rows, marketIdx) {
   const t = { up: 0, flat: 0, down: 0, limitUp: 0, limitDown: 0 };
@@ -194,8 +309,8 @@ function breadth(rows, marketIdx) {
     if (rate > 0) t.up++;
     else if (rate < 0) t.down++;
     else t.flat++;
-    if (rate >= LIMIT) t.limitUp++;
-    else if (rate <= -LIMIT) t.limitDown++;
+    if (r[10] === 1) t.limitUp++;
+    else if (r[10] === -1) t.limitDown++;
   }
   return t;
 }
@@ -223,9 +338,10 @@ async function fetchIndustries() {
 async function main() {
   const started = Date.now();
 
-  const [indices, industries, ...marketRows] = await Promise.all([
+  const [indices, industries, themes, ...marketRows] = await Promise.all([
     fetchIndices(),
     fetchIndustries(),
+    fetchThemeGroups(),
     ...MARKETS.map(fetchMarket),
   ]);
 
@@ -235,8 +351,13 @@ async function main() {
   if (rows.length < 500) throw new Error(`수집된 종목이 너무 적다 (${rows.length}건) — 배포 중단`);
   if (indices.length !== 3) throw new Error('지수 수집 실패 — 배포 중단');
 
-  // 수급은 종목 목록이 있어야 대상을 고를 수 있어 뒤이어 받는다
-  const flows = await fetchFlows(rows);
+  // 수급과 상세는 종목 목록이 있어야 대상을 고를 수 있어 뒤이어 받는다
+  const nameByCode = new Map(rows.map((r) => [r[0], r[1]]));
+  const universe = detailUniverse(rows);
+  const [flows, details] = await Promise.all([
+    fetchFlows(rows),
+    fetchDetails(universe, nameByCode),
+  ]);
 
   const updatedAt = new Date().toISOString();
   const market = {
@@ -256,12 +377,14 @@ async function main() {
       etf: rows.filter((r) => r[3] === 1).length,
       etn: rows.filter((r) => r[3] === 2).length,
     },
+    // 상세(지표·차트) 를 받아 둔 종목. 화면은 이 목록으로 차트 유무를 미리 안다
+    detailCodes: details.map((d) => d.code),
   };
 
   const stocks = {
     updatedAt,
     // 파일 크기를 줄이려고 객체 대신 배열 + 컬럼 헤더로 싣는다
-    cols: ['code', 'name', 'market', 'type', 'price', 'change', 'rate', 'volume', 'value', 'cap'],
+    cols: ['code', 'name', 'market', 'type', 'price', 'change', 'rate', 'volume', 'value', 'cap', 'limit'],
     units: { price: '원', change: '원', rate: '%', volume: '주', value: '원', cap: '원' },
     rows,
   };
@@ -280,6 +403,17 @@ async function main() {
   await writeFile(path.join(OUT_DIR, 'market.json'), JSON.stringify(market));
   await writeFile(path.join(OUT_DIR, 'stocks.json'), JSON.stringify(stocks));
   await writeFile(path.join(OUT_DIR, 'flows.json'), JSON.stringify(flowsFile));
+  await writeFile(path.join(OUT_DIR, 'themes.json'), JSON.stringify({
+    updatedAt,
+    // 구성종목 코드만 싣는다. 시세·시총은 stocks.json 에 이미 있어 화면에서 합친다
+    groups: themes.filter((t) => t.codes.length),
+  }));
+
+  // 종목 상세는 클릭할 때만 필요하니 한 덩어리로 묶지 않고 종목별 파일로 쪼갠다
+  const detailDir = path.join(OUT_DIR, 'stock');
+  await mkdir(detailDir, { recursive: true });
+  await Promise.all(details.map((d) =>
+    writeFile(path.join(detailDir, `${d.code}.json`), JSON.stringify({ ...d, updatedAt }))));
 
   const b = market.breadth.all;
   const cnt = (i, min) => flows.filter((f) => (min > 0 ? f[i] >= min : f[i] <= min)).length;
@@ -288,7 +422,9 @@ async function main() {
       `업종 ${industries.length}개, 지수 ${indices.length}개, 수급 ${flows.length}종목\n` +
       `      시장 폭: 상승 ${b.up} / 보합 ${b.flat} / 하락 ${b.down} · 상한 ${b.limitUp} / 하한 ${b.limitDown}\n` +
       `      연속 순매수 3일↑ 외국인 ${cnt(7, 3)} / 기관 ${cnt(9, 3)} · 7일↑ 외국인 ${cnt(7, 7)} / 기관 ${cnt(9, 7)}\n` +
-      `      연속 순매도 3일↑ 외국인 ${cnt(7, -3)} / 기관 ${cnt(9, -3)} · 7일↑ 외국인 ${cnt(7, -7)} / 기관 ${cnt(9, -7)}` +
+      `      연속 순매도 3일↑ 외국인 ${cnt(7, -3)} / 기관 ${cnt(9, -3)} · 7일↑ 외국인 ${cnt(7, -7)} / 기관 ${cnt(9, -7)}\n` +
+      `      테마 ${themes.length}개 (구성종목 ${themes.reduce((s, t) => s + t.codes.length, 0)}쌍), ` +
+      `상세 ${details.length}종목 (차트 있음 ${details.filter((d) => d.chart.length).length})` +
       ` — ${((Date.now() - started) / 1000).toFixed(1)}초`,
   );
 }
