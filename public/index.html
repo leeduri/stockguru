@@ -62,8 +62,24 @@
         <button type="button" data-tab="value" aria-pressed="false">거래대금</button>
         <button type="button" data-tab="volume" aria-pressed="false">거래량</button>
         <button type="button" data-tab="cap" aria-pressed="false">시가총액</button>
-        <button type="button" data-tab="foreign" aria-pressed="false">외국인 순매수</button>
-        <button type="button" data-tab="organ" aria-pressed="false">기관 순매수</button>
+        <button type="button" data-tab="flow" aria-pressed="false">수급 (외국인·기관)</button>
+      </div>
+    </div>
+
+    <!-- 수급 탭 전용 하위 필터 — 주체 × 방향 × 연속일수 -->
+    <div class="filters flow-filters" id="flowFilters" hidden>
+      <div class="seg" role="group" aria-label="투자 주체">
+        <button type="button" data-who="foreign" aria-pressed="true">외국인</button>
+        <button type="button" data-who="organ" aria-pressed="false">기관</button>
+      </div>
+      <div class="seg" role="group" aria-label="매매 방향">
+        <button type="button" data-fdir="buy" aria-pressed="true">순매수</button>
+        <button type="button" data-fdir="sell" aria-pressed="false">순매도</button>
+      </div>
+      <div class="seg" role="group" aria-label="연속 일수">
+        <button type="button" data-days="1" aria-pressed="true">당일</button>
+        <button type="button" data-days="3" aria-pressed="false">3일 연속</button>
+        <button type="button" data-days="7" aria-pressed="false">7일 연속</button>
       </div>
     </div>
 
@@ -87,19 +103,7 @@
       <div class="scroll">
         <table id="tbl">
           <caption class="sr-only">시장·종류·검색어로 걸러진 종목을 선택한 기준으로 정렬한 표</caption>
-          <thead>
-            <tr>
-              <th scope="col">#</th>
-              <th scope="col" class="sortable" data-sort="name">종목<span class="arrow"></span></th>
-              <th scope="col" class="sortable c-key" data-sort="rate">등락률<span class="arrow"></span></th>
-              <th scope="col" class="sortable" data-sort="price">현재가<span class="arrow"></span></th>
-              <th scope="col" class="sortable c-sub" data-sort="change">전일대비<span class="arrow"></span></th>
-              <th scope="col" class="sortable c-key" data-sort="value">거래대금<span class="arrow"></span></th>
-              <th scope="col" class="sortable c-sub" data-sort="volume">거래량<span class="arrow"></span></th>
-              <th scope="col" class="sortable c-sub" data-sort="cap">시가총액<span class="arrow"></span></th>
-              <th scope="col" class="sortable c-key" data-sort="flow" id="flowTh" hidden>순매수<span class="arrow"></span></th>
-            </tr>
-          </thead>
+          <thead><tr id="thead"></tr></thead>
           <tbody id="tbody"></tbody>
         </table>
       </div>

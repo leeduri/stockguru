@@ -108,8 +108,33 @@ async function fetchIndices() {
  * 거래대금 상위 FLOW_UNIVERSE 종목만 훑는다 (동시 8개, 약 6초).
  * 순매수 "수량"만 주므로 금액은 종가를 곱해 추정한다 — 실제 체결 평균가가
  * 아니므로 화면에서도 추정치임을 밝힌다.
+ *
+ * 응답은 최근 10영업일치가 최신순으로 온다. 추가 요청 없이 이 배열만으로
+ * 연속 순매수/순매도 일수를 셀 수 있다.
  */
 const FLOW_UNIVERSE = 500;
+
+/**
+ * 최신일과 같은 부호가 며칠이나 이어지는지 센다.
+ * 반환: { days, sum } — days 는 부호 있는 값(+3 = 3일 연속 순매수, -3 = 3일 연속 순매도),
+ * sum 은 그 기간의 순매수 추정금액 합계(원, 부호 유지).
+ * 응답이 10일치뿐이라 연속일수는 10에서 잘린다.
+ */
+function streakOf(history, qtyKey, fallbackClose) {
+  const qty = (d) => num(d[qtyKey]) ?? 0;
+  const sign = Math.sign(qty(history[0]));
+  if (!sign) return { days: 0, sum: 0 };
+
+  let days = 0;
+  let sum = 0;
+  for (const d of history) {
+    const q = qty(d);
+    if (Math.sign(q) !== sign) break;
+    days++;
+    sum += q * (num(d.closePrice) ?? fallbackClose);
+  }
+  return { days: days * sign, sum: Math.round(sum) };
+}
 
 async function fetchFlows(rows) {
   const targets = rows
@@ -130,14 +155,21 @@ async function fetchFlows(rows) {
           if (!t) continue;
           const close = num(t.closePrice) ?? r[4];
           const qty = (v) => num(v) ?? 0;
+          const fs = streakOf(j, 'foreignerPureBuyQuant', close);
+          const os = streakOf(j, 'organPureBuyQuant', close);
           out.push([
             r[0],
-            Math.round(qty(t.foreignerPureBuyQuant) * close),   // 외국인 순매수 추정금액 (원)
+            Math.round(qty(t.foreignerPureBuyQuant) * close),   // 외국인 당일 순매수 추정금액 (원)
             Math.round(qty(t.organPureBuyQuant) * close),       // 기관
             Math.round(qty(t.individualPureBuyQuant) * close),  // 개인
             num(String(t.foreignerHoldRatio).replace('%', '')), // 외국인 지분율 (%)
-            qty(t.foreignerPureBuyQuant),                       // 외국인 순매수 수량 (주)
+            qty(t.foreignerPureBuyQuant),                       // 외국인 당일 순매수 수량 (주)
             qty(t.organPureBuyQuant),                           // 기관 수량
+            fs.days,                                            // 외국인 연속일수 (+매수 / -매도)
+            fs.sum,                                             // 외국인 연속기간 누적 추정금액
+            os.days,                                            // 기관 연속일수
+            os.sum,                                             // 기관 연속기간 누적 추정금액
+            j.length,                                           // 확보한 과거 영업일 수 (연속 판정 상한)
           ]);
         } catch {
           /* 개별 종목 실패는 건너뛴다 — 수급은 부가 정보라 전체를 막지 않는다 */
@@ -237,8 +269,10 @@ async function main() {
   const flowsFile = {
     updatedAt,
     universe: FLOW_UNIVERSE,
+    maxStreak: 10,   // 응답이 10영업일치라 연속일수는 여기서 잘린다
     note: '거래대금 상위 종목만 수집. 금액은 순매수 수량 × 종가로 추정한 값이다.',
-    cols: ['code', 'foreign', 'organ', 'individual', 'holdRatio', 'foreignQty', 'organQty'],
+    cols: ['code', 'foreign', 'organ', 'individual', 'holdRatio', 'foreignQty', 'organQty',
+      'fStreak', 'fSum', 'oStreak', 'oSum', 'histLen'],
     rows: flows,
   };
 
@@ -248,10 +282,13 @@ async function main() {
   await writeFile(path.join(OUT_DIR, 'flows.json'), JSON.stringify(flowsFile));
 
   const b = market.breadth.all;
+  const cnt = (i, min) => flows.filter((f) => (min > 0 ? f[i] >= min : f[i] <= min)).length;
   console.log(
     `완료: 종목 ${rows.length}건 (주식 ${market.counts.stock} / ETF ${market.counts.etf} / ETN ${market.counts.etn}), ` +
       `업종 ${industries.length}개, 지수 ${indices.length}개, 수급 ${flows.length}종목\n` +
-      `      시장 폭: 상승 ${b.up} / 보합 ${b.flat} / 하락 ${b.down} · 상한 ${b.limitUp} / 하한 ${b.limitDown}` +
+      `      시장 폭: 상승 ${b.up} / 보합 ${b.flat} / 하락 ${b.down} · 상한 ${b.limitUp} / 하한 ${b.limitDown}\n` +
+      `      연속 순매수 3일↑ 외국인 ${cnt(7, 3)} / 기관 ${cnt(9, 3)} · 7일↑ 외국인 ${cnt(7, 7)} / 기관 ${cnt(9, 7)}\n` +
+      `      연속 순매도 3일↑ 외국인 ${cnt(7, -3)} / 기관 ${cnt(9, -3)} · 7일↑ 외국인 ${cnt(7, -7)} / 기관 ${cnt(9, -7)}` +
       ` — ${((Date.now() - started) / 1000).toFixed(1)}초`,
   );
 }

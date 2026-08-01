@@ -16,13 +16,16 @@ const BAR_SCALE = 30;            // 등락률 막대는 ±30%(가격제한폭) �
 const state = {
   market: 'all',                 // 'all' | 0 | 1
   type: 0,                       // 0=종목, 1=ETF, 2=ETN
-  tab: 'up',                     // up | down | value | volume | cap | foreign | organ
+  tab: 'up',                     // up | down | value | volume | cap | flow
+  who: 'foreign',                // 수급 탭: foreign | organ
+  fdir: 'buy',                   // 수급 탭: buy | sell
+  days: 1,                       // 수급 탭: 연속 최소 일수 (1=당일)
   sort: null,                    // 열 머리글로 직접 정렬했을 때 { key, dir }
   q: '',
   limit: PAGE,
   stocks: null,
   market_: null,
-  flowMap: null,                 // code -> [외국인, 기관, 개인, 지분율, 외국인수량, 기관수량]
+  flowMap: null,                 // code -> flows.json 의 한 행
   flowMeta: null,
 };
 
@@ -219,51 +222,105 @@ function renderBreadth() {
 /* ----- 표 ----- */
 
 const COL = { code: 0, name: 1, market: 2, type: 3, price: 4, change: 5, rate: 6, volume: 7, value: 8, cap: 9 };
-const FLOW = { foreign: 1, organ: 2, individual: 3, holdRatio: 4, foreignQty: 5, organQty: 6 };
-
-const TAB_SORT = {
-  up:      { key: 'rate',   dir: -1, label: '등락률 높은 순' },
-  down:    { key: 'rate',   dir: 1,  label: '등락률 낮은 순' },
-  value:   { key: 'value',  dir: -1, label: '거래대금 많은 순' },
-  volume:  { key: 'volume', dir: -1, label: '거래량 많은 순' },
-  cap:     { key: 'cap',    dir: -1, label: '시가총액 큰 순' },
-  foreign: { key: 'flow',   dir: -1, label: '외국인 순매수 많은 순' },
-  organ:   { key: 'flow',   dir: -1, label: '기관 순매수 많은 순' },
+const FLOW = {
+  foreign: 1, organ: 2, individual: 3, holdRatio: 4, foreignQty: 5, organQty: 6,
+  fStreak: 7, fSum: 8, oStreak: 9, oSum: 10, histLen: 11,
 };
 
-const isFlowTab = () => state.tab === 'foreign' || state.tab === 'organ';
-const flowIdx = () => (state.tab === 'organ' ? FLOW.organ : FLOW.foreign);
+const isFlowTab = () => state.tab === 'flow';
+const isOrgan = () => state.who === 'organ';
+const whoLabel = () => (isOrgan() ? '기관' : '외국인');
+const dirLabel = () => (state.fdir === 'sell' ? '순매도' : '순매수');
+/** 순매도는 값이 음수라, 큰 순매도가 위로 오려면 오름차순이어야 한다 */
+const dirSign = () => (state.fdir === 'sell' ? 1 : -1);
 
-/** 행의 정렬 키 값. 'flow' 는 현재 수급 탭이 가리키는 값 */
-function valueOf(row, key) {
-  if (key === 'flow') {
-    const f = state.flowMap?.get(row[COL.code]);
-    return f ? f[flowIdx()] : 0;
+const idxToday = () => (isOrgan() ? FLOW.organ : FLOW.foreign);
+const idxQty = () => (isOrgan() ? FLOW.organQty : FLOW.foreignQty);
+const idxStreak = () => (isOrgan() ? FLOW.oStreak : FLOW.fStreak);
+const idxSum = () => (isOrgan() ? FLOW.oSum : FLOW.fSum);
+
+function tabSort() {
+  if (isFlowTab()) {
+    return {
+      key: state.days > 1 ? 'sum' : 'flow',
+      dir: dirSign(),
+      label: state.days > 1 ? '누적 순매수 많은 순' : `당일 ${dirLabel()} 많은 순`,
+    };
   }
+  return {
+    up:     { key: 'rate',   dir: -1, label: '등락률 높은 순' },
+    down:   { key: 'rate',   dir: 1,  label: '등락률 낮은 순' },
+    value:  { key: 'value',  dir: -1, label: '거래대금 많은 순' },
+    volume: { key: 'volume', dir: -1, label: '거래량 많은 순' },
+    cap:    { key: 'cap',    dir: -1, label: '시가총액 큰 순' },
+  }[state.tab];
+}
+
+/** 행의 정렬 키 값. flow/streak/sum 은 현재 선택한 주체 기준 */
+function valueOf(row, key) {
+  const f = state.flowMap?.get(row[COL.code]);
+  if (key === 'flow') return f ? f[idxToday()] : 0;
+  if (key === 'sum') return f ? f[idxSum()] : 0;
+  if (key === 'streak') return f ? f[idxStreak()] : 0;
   return row[COL[key]];
 }
 
 function filtered() {
   const q = state.q.trim().toLowerCase();
   const flowTab = isFlowTab();
+  const wantSign = state.fdir === 'sell' ? -1 : 1;
 
   const out = [];
   for (const r of state.stocks.rows) {
     if (r[COL.type] !== state.type) continue;
     if (state.market !== 'all' && r[COL.market] !== state.market) continue;
     if (q && !(r[COL.name].toLowerCase().includes(q) || r[COL.code].includes(q))) continue;
-    // 수급 탭에서는 수집 대상(거래대금 상위)만 의미가 있다
-    if (flowTab && !state.flowMap?.has(r[COL.code])) continue;
+
+    if (flowTab) {
+      // 수급 탭에서는 수집 대상(거래대금 상위)만 의미가 있다
+      const f = state.flowMap?.get(r[COL.code]);
+      if (!f) continue;
+      // 연속일수가 방향과 같은 부호이고, 요구한 일수 이상이어야 한다
+      const streak = f[idxStreak()];
+      if (Math.sign(streak) !== wantSign) continue;
+      if (Math.abs(streak) < state.days) continue;
+    }
     out.push(r);
   }
 
-  const s = state.sort ?? TAB_SORT[state.tab];
+  const s = state.sort ?? tabSort();
   if (s.key === 'name') {
     out.sort((a, b) => s.dir * a[COL.name].localeCompare(b[COL.name], 'ko'));
   } else {
     out.sort((a, b) => s.dir * (valueOf(a, s.key) - valueOf(b, s.key)));
   }
   return out;
+}
+
+/* 열 구성 — 수급 탭에서는 거래량·시가총액을 접고 수급 열을 편다 */
+function columns() {
+  const flow = isFlowTab();
+  const cols = [
+    { key: null, label: '#', cls: 'rank' },
+    { key: 'name', label: '종목', cls: 'name' },
+    { key: 'rate', label: '등락률', cls: 'c-rate c-key' },
+    { key: 'price', label: '현재가', cls: '' },
+    { key: 'change', label: '전일대비', cls: 'c-sub' },
+    { key: 'value', label: '거래대금', cls: flow ? 'c-sub' : 'c-key' },
+  ];
+  if (flow) {
+    cols.push(
+      { key: 'flow', label: `당일 ${dirLabel()}`, cls: 'c-sub' },
+      { key: 'streak', label: '연속', cls: '' },
+      { key: 'sum', label: `누적 ${dirLabel()}`, cls: 'c-key' },
+    );
+  } else {
+    cols.push(
+      { key: 'volume', label: '거래량', cls: 'c-sub' },
+      { key: 'cap', label: '시가총액', cls: 'c-sub' },
+    );
+  }
+  return cols;
 }
 
 /** 등락률 강도 막대 — ±30% 고정 눈금 */
@@ -276,123 +333,180 @@ function rateBar(rate) {
   return bar;
 }
 
+/** 셀 하나를 그린다 */
+function renderCell(col, r, idx) {
+  const rate = r[COL.rate];
+  const d = dir(rate);
+  const f = state.flowMap?.get(r[COL.code]);
+
+  switch (col.key) {
+    case null: {
+      const td = el('td', 'rank');
+      td.textContent = idx + 1;
+      return td;
+    }
+    case 'name': {
+      const td = el('td', 'name');
+      const nm = el('span', 'nm');
+      nm.textContent = r[COL.name];
+      const cd = el('span', 'cd');
+      cd.textContent = r[COL.code];
+      td.append(nm, cd);
+      const TYPE_TAG = { 1: 'ETF', 2: 'ETN' };
+      if (TYPE_TAG[r[COL.type]]) {
+        const tag = el('span', 'tag');
+        tag.textContent = TYPE_TAG[r[COL.type]];
+        td.append(tag);
+      }
+      if (rate >= LIMIT_RATE || rate <= -LIMIT_RATE) {
+        const bg = el('span', 'limit ' + (rate > 0 ? 'limit-up' : 'limit-down'));
+        bg.textContent = rate > 0 ? '상한가' : '하한가';
+        td.append(bg);
+      }
+      return td;
+    }
+    case 'rate': {
+      const td = el('td', 'c-rate');
+      const cell = el('span', 'rate-cell');
+      const n = el('span', 'rate-num ' + d.cls);
+      n.textContent = `${d.mark} ${Math.abs(rate).toFixed(2)}%`;
+      cell.append(n, rateBar(rate));
+      td.append(cell);
+      return td;
+    }
+    case 'price': {
+      const td = el('td');
+      td.textContent = fmtInt(r[COL.price]);
+      return td;
+    }
+    case 'change': {
+      const td = el('td', 'c-sub ' + d.cls);
+      td.textContent = `${d.mark} ${fmtInt(Math.abs(r[COL.change]))}`;
+      return td;
+    }
+    case 'value': {
+      const td = el('td', col.cls);
+      td.textContent = fmtWon(r[COL.value]);
+      return td;
+    }
+    case 'volume': {
+      const td = el('td', 'c-sub');
+      td.textContent = fmtVol(r[COL.volume]);
+      return td;
+    }
+    case 'cap': {
+      const td = el('td', 'c-sub');
+      td.textContent = fmtWon(r[COL.cap]);
+      return td;
+    }
+    case 'flow': {
+      const amount = f ? f[idxToday()] : 0;
+      const fd = dir(amount);
+      const td = el('td', 'c-sub ' + fd.cls);
+      td.textContent = `${fd.mark} ${fmtWon(Math.abs(amount))}`;
+      td.title = `${whoLabel()} 당일 순${amount < 0 ? '매도' : '매수'} ${fmtInt(Math.abs(f ? f[idxQty()] : 0))}주`;
+      return td;
+    }
+    case 'streak': {
+      const n = f ? f[idxStreak()] : 0;
+      const td = el('td');
+      const pill = el('span', 'streak ' + (n > 0 ? 'up' : n < 0 ? 'down' : 'flat'));
+      pill.textContent = `${Math.abs(n)}일`;
+      // 응답이 10영업일치라 그 이상은 알 수 없다 — 잘렸으면 그렇다고 말한다
+      const capped = f && Math.abs(n) >= (f[FLOW.histLen] ?? 10);
+      if (capped) pill.textContent += '+';
+      pill.title = `${whoLabel()} ${Math.abs(n)}일 연속 순${n < 0 ? '매도' : '매수'}` +
+        (capped ? ` (확보한 ${f[FLOW.histLen]}영업일 전체 — 실제로는 더 길 수 있음)` : '');
+      td.append(pill);
+      return td;
+    }
+    case 'sum': {
+      const amount = f ? f[idxSum()] : 0;
+      const fd = dir(amount);
+      const td = el('td', 'c-key ' + fd.cls);
+      td.textContent = `${fd.mark} ${fmtWon(Math.abs(amount))}`;
+      td.title = `연속 기간 ${whoLabel()} 순${amount < 0 ? '매도' : '매수'} 누적 추정금액`;
+      return td;
+    }
+    default:
+      return el('td');
+  }
+}
+
 function renderTable() {
   const rows = filtered();
-  const body = $('#tbody');
-  body.textContent = '';
+  const cols = columns();
+  const s = state.sort ?? tabSort();
 
-  const flowTab = isFlowTab();
-  $('#flowTh').hidden = !flowTab;
-  $('#flowTh').firstChild.textContent = state.tab === 'organ' ? '기관 순매수' : '외국인 순매수';
+  // 머리글 — 열 구성이 탭에 따라 달라져 매번 다시 그린다
+  const head = $('#thead');
+  head.textContent = '';
+  for (const col of cols) {
+    const th = el('th', col.cls + (col.key ? ' sortable' : ''));
+    th.scope = 'col';
+    th.append(document.createTextNode(col.label));
+    if (col.key) {
+      th.dataset.sort = col.key;
+      const arrow = el('span', 'arrow');
+      if (col.key === s.key) {
+        th.setAttribute('aria-sort', s.dir === -1 ? 'descending' : 'ascending');
+        arrow.textContent = s.dir === -1 ? '▼' : '▲';
+      }
+      th.append(arrow);
+      th.addEventListener('click', () => {
+        const cur = state.sort ?? tabSort();
+        // 같은 열을 다시 누르면 방향만 뒤집는다. 이름은 오름차순부터.
+        state.sort = { key: col.key, dir: cur.key === col.key ? -cur.dir : (col.key === 'name' ? 1 : -1) };
+        state.limit = PAGE;
+        renderTable();
+      });
+    }
+    head.append(th);
+  }
 
   const hint = $('#tabHint');
-  if (flowTab) {
+  if (isFlowTab()) {
     hint.hidden = false;
     hint.textContent =
       `거래대금 상위 ${fmtInt(state.flowMeta?.universe ?? 500)}종목만 수집합니다. ` +
-      '순매수 금액은 순매수 수량 × 종가로 추정한 값이며, 열 머리글을 누르면 순매도 상위로 뒤집힙니다.';
+      `금액은 순매수 수량 × 종가로 추정한 값이고, 연속일수는 최근 ${state.flowMeta?.maxStreak ?? 10}영업일까지만 셀 수 있습니다.`;
   } else {
     hint.hidden = true;
   }
 
-  const colCount = flowTab ? 9 : 8;
+  const body = $('#tbody');
+  body.textContent = '';
   const shown = rows.slice(0, state.limit);
-  const TYPE_TAG = { 1: 'ETF', 2: 'ETN' };
 
   if (!shown.length) {
     const tr = el('tr');
     const td = el('td');
-    td.colSpan = colCount;
+    td.colSpan = cols.length;
     td.className = 'empty';
-    td.textContent = state.q ? `"${state.q}"에 해당하는 종목이 없습니다.` : '표시할 종목이 없습니다.';
+    td.textContent = state.q
+      ? `"${state.q}"에 해당하는 종목이 없습니다.`
+      : isFlowTab()
+        ? `${whoLabel()}이 ${state.days}일 연속 ${dirLabel()}한 종목이 없습니다.`
+        : '표시할 종목이 없습니다.';
     tr.append(td);
     body.append(tr);
   }
 
   shown.forEach((r, idx) => {
-    const rate = r[COL.rate];
-    const d = dir(rate);
     const tr = el('tr');
-
-    const rank = el('td', 'rank');
-    rank.textContent = idx + 1;
-
-    const name = el('td', 'name');
-    const nm = el('span', 'nm');
-    nm.textContent = r[COL.name];
-    const cd = el('span', 'cd');
-    cd.textContent = r[COL.code];
-    name.append(nm, cd);
-    if (TYPE_TAG[r[COL.type]]) {
-      const tag = el('span', 'tag');
-      tag.textContent = TYPE_TAG[r[COL.type]];
-      name.append(tag);
-    }
-    if (rate >= LIMIT_RATE || rate <= -LIMIT_RATE) {
-      const bg = el('span', 'limit ' + (rate > 0 ? 'limit-up' : 'limit-down'));
-      bg.textContent = rate > 0 ? '상한가' : '하한가';
-      name.append(bg);
-    }
-
-    // 등락률 — 숫자 + 강도 막대
-    const rateTd = el('td', 'c-rate');
-    const cell = el('span', 'rate-cell');
-    const numSpan = el('span', 'rate-num ' + d.cls);
-    numSpan.textContent = `${d.mark} ${Math.abs(rate).toFixed(2)}%`;
-    cell.append(numSpan, rateBar(rate));
-    rateTd.append(cell);
-
-    const price = el('td');
-    price.textContent = fmtInt(r[COL.price]);
-
-    const chg = el('td', 'c-sub ' + d.cls);
-    chg.textContent = `${d.mark} ${fmtInt(Math.abs(r[COL.change]))}`;
-
-    const val = el('td', 'c-key');
-    val.textContent = fmtWon(r[COL.value]);
-
-    const vol = el('td', 'c-sub');
-    vol.textContent = fmtVol(r[COL.volume]);
-
-    const cap = el('td', 'c-sub');
-    cap.textContent = fmtWon(r[COL.cap]);
-
-    tr.append(rank, name, rateTd, price, chg, val, vol, cap);
-
-    if (flowTab) {
-      const f = state.flowMap.get(r[COL.code]);
-      const amount = f ? f[flowIdx()] : 0;
-      const fd = dir(amount);
-      const td = el('td', 'c-key ' + fd.cls);
-      td.textContent = `${fd.mark} ${fmtWon(Math.abs(amount))}`;
-      const qty = f ? f[state.tab === 'organ' ? FLOW.organQty : FLOW.foreignQty] : 0;
-      td.title = `${state.tab === 'organ' ? '기관' : '외국인'} 순${amount < 0 ? '매도' : '매수'} ` +
-        `${fmtInt(Math.abs(qty))}주 (추정 ${fmtWon(Math.abs(amount))})` +
-        (f?.[FLOW.holdRatio] != null ? ` · 외국인 지분율 ${f[FLOW.holdRatio]}%` : '');
-      tr.append(td);
-    }
-
+    for (const col of cols) tr.append(renderCell(col, r, idx));
     body.append(tr);
   });
 
-  const s = state.sort ?? TAB_SORT[state.tab];
+  const what = isFlowTab()
+    ? `${whoLabel()} ${state.days > 1 ? `${state.days}일 연속 ` : '당일 '}${dirLabel()}`
+    : '';
   $('#rankSub').textContent =
-    `${rows.length.toLocaleString('ko-KR')}개 · ${state.sort ? '직접 정렬' : TAB_SORT[state.tab].label}`;
+    (what ? what + ' · ' : '') +
+    `${rows.length.toLocaleString('ko-KR')}개 · ${state.sort ? '직접 정렬' : tabSort().label}`;
 
   $('#more').hidden = rows.length <= state.limit;
   $('#moreBtn').textContent = `더 보기 (${Math.min(PAGE, rows.length - state.limit)}개)`;
-
-  document.querySelectorAll('th.sortable').forEach((th) => {
-    const key = th.dataset.sort;
-    const arrow = th.querySelector('.arrow');
-    if (key === s.key) {
-      th.setAttribute('aria-sort', s.dir === -1 ? 'descending' : 'ascending');
-      arrow.textContent = s.dir === -1 ? '▼' : '▲';
-    } else {
-      th.removeAttribute('aria-sort');
-      arrow.textContent = '';
-    }
-  });
 }
 
 /* ----- 업종 히트맵 ----- */
@@ -519,6 +633,7 @@ bindSeg('tab', (v) => {
   state.sort = null;
   // 수급은 주식만 있어 ETF·ETN 선택이 의미가 없다 — 종목으로 되돌리고 잠근다
   const lock = isFlowTab();
+  $('#flowFilters').hidden = !lock;
   $('#typeSeg').querySelectorAll('[data-type]').forEach((b) => {
     const isStock = b.dataset.type === '0';
     b.disabled = lock && !isStock;
@@ -526,6 +641,11 @@ bindSeg('tab', (v) => {
   });
   if (lock) state.type = 0;
 });
+
+// 수급 탭 하위 필터 — 어느 것을 바꾸든 정렬 기준이 따라 바뀌므로 직접 정렬은 해제한다
+bindSeg('who', (v) => { state.who = v; state.sort = null; });
+bindSeg('fdir', (v) => { state.fdir = v; state.sort = null; });
+bindSeg('days', (v) => { state.days = Number(v); state.sort = null; });
 
 let qTimer;
 $('#q').addEventListener('input', (e) => {
@@ -540,17 +660,6 @@ $('#q').addEventListener('input', (e) => {
 $('#moreBtn').addEventListener('click', () => {
   state.limit += PAGE;
   renderTable();
-});
-
-document.querySelectorAll('th.sortable').forEach((th) => {
-  th.addEventListener('click', () => {
-    const key = th.dataset.sort;
-    const cur = state.sort ?? TAB_SORT[state.tab];
-    // 같은 열을 다시 누르면 방향만 뒤집는다. 이름은 오름차순부터.
-    state.sort = { key, dir: cur.key === key ? -cur.dir : (key === 'name' ? 1 : -1) };
-    state.limit = PAGE;
-    renderTable();
-  });
 });
 
 $('#heatViewBtn').addEventListener('click', (e) => {
