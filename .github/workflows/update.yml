@@ -36,11 +36,11 @@ jobs:
       - name: 시세 수집
         run: node scripts/fetch.js
 
-      # enablement: 저장소에 Pages 가 꺼져 있으면 워크플로가 직접 켠다
-      # (Settings > Pages 에서 손으로 "GitHub Actions" 를 고르지 않아도 되게)
+      # 이 단계는 저장소에 Pages 가 이미 켜져 있어야 통과한다.
+      # Settings > Pages > Source 를 "GitHub Actions" 로 한 번 바꿔 두면 된다.
+      # (configure-pages 의 enablement: true 로 자동화해 보려 했으나, Pages 활성화는
+      #  관리자 권한을 요구해서 기본 GITHUB_TOKEN 으로는 403 이 난다.)
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
