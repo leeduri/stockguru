@@ -2,5 +2,6 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# 수집 결과는 Actions 가 매번 새로 굽는다 — 저장소에 커밋하지 않는다
-public/data/*.json
+# 수집 결과는 Actions 가 매번 새로 굽는다 — 저장소에 커밋하지 않는다.
+# `*.json` 만 적으면 public/data/stock/ 안쪽을 못 걸러내니 폴더째 무시한다.
+public/data/
