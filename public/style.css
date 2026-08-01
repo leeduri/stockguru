@@ -194,6 +194,84 @@ body {
 .down { color: var(--dn-ink); }
 .flat { color: var(--text-secondary); }
 
+/* ---------- 시장 온도계 ---------- */
+
+.limits {
+  display: flex;
+  gap: 14px;
+  font-size: 13px;
+  align-items: baseline;
+}
+.limits b {
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.limits .lbl { color: var(--text-secondary); margin-right: 4px; }
+
+.breadth { padding: 14px 16px; }
+.br-row { display: flex; align-items: center; gap: 12px; }
+.br-row + .br-row { margin-top: 12px; }
+.br-row .mkt {
+  width: 48px;
+  flex: none;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* 누적 막대 — 세그먼트 사이는 테두리가 아니라 2px 표면 간격이 가른다 */
+.br-bar {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 2px;
+  height: 22px;
+  min-width: 0;
+}
+.br-seg {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: visible;
+  min-width: 2px;
+}
+.br-seg:first-child { border-radius: 4px 0 0 4px; }
+.br-seg:last-child { border-radius: 0 4px 4px 0; }
+.br-seg.s-up { background: var(--up-2); color: var(--on-up-2); }
+.br-seg.s-flat { background: var(--flat); color: var(--on-flat); }
+.br-seg.s-down { background: var(--dn-2); color: var(--on-dn-2); }
+
+.br-row .tot {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.br-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gridline);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.br-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.br-legend i {
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+.br-legend .k-up { background: var(--up-2); }
+.br-legend .k-flat { background: var(--flat); }
+.br-legend .k-down { background: var(--dn-2); }
+
 /* ---------- 섹션 ---------- */
 
 section { margin-bottom: 36px; }
@@ -231,7 +309,14 @@ section { margin-bottom: 36px; }
   border-radius: 8px;
   padding: 2px;
   gap: 2px;
+  /* 탭이 많아 좁은 화면에서 넘칠 때, 페이지가 아니라 이 줄만 스크롤되게 한다 */
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
+.seg::-webkit-scrollbar { height: 4px; }
+.seg::-webkit-scrollbar-thumb { background: var(--axis); border-radius: 2px; }
 .seg button {
   font: inherit;
   font-size: 13px;
@@ -243,6 +328,7 @@ section { margin-bottom: 36px; }
   cursor: pointer;
   min-height: 32px;
   white-space: nowrap;
+  flex: none;
 }
 .seg button:hover { background: var(--wash); }
 .seg button[aria-pressed="true"] {
@@ -325,6 +411,63 @@ tbody td.name .tag {
   padding: 0 4px;
   margin-left: 6px;
 }
+/* 상한가·하한가는 그날 가장 눈에 띄어야 할 상태라 채운 배지로 */
+tbody td.name .limit {
+  font-size: 11px;
+  font-weight: 650;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.limit-up { background: var(--up-3); color: var(--on-up-3); }
+.limit-down { background: var(--dn-3); color: var(--on-dn-3); }
+
+/* 열 강약 — 중요한 열은 크고 진하게, 부차적인 열은 뒤로 물린다 */
+th.c-key, td.c-key { font-size: 15px; }
+td.c-key { font-weight: 620; color: var(--text-primary); }
+th.c-key { color: var(--text-secondary); }
+th.c-sub, td.c-sub { font-size: 13px; }
+td.c-sub { color: var(--text-secondary); }
+
+/* 등락률 칸: 숫자 + 강도 막대. 막대는 모두 같은 왼쪽 기준선에서 자라야 길이가 비교된다 */
+td.c-rate { padding-right: 12px; }
+.rate-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.rate-num {
+  font-size: 15px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  min-width: 66px;
+  text-align: right;
+}
+.bar {
+  flex: none;
+  width: 56px;
+  height: 8px;
+  background: var(--wash);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  border-radius: 0 4px 4px 0;   /* 기준선 쪽은 각지고, 데이터 끝만 둥글게 */
+}
+.bar i.f-up { background: var(--up-2); }
+.bar i.f-down { background: var(--dn-2); }
+
+.hint {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: -4px 0 10px;
+}
+.seg button[disabled] { opacity: 0.4; cursor: not-allowed; }
+.seg button[disabled]:hover { background: none; }
 
 .empty {
   padding: 40px 16px;

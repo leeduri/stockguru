@@ -10,17 +10,20 @@ const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.cla
 
 const PAGE = 50;                 // 한 번에 보여줄 행 수
 const REFRESH_MS = 60_000;       // 배포 주기(5분)보다 짧게 훑어 새 파일을 빨리 잡는다
+const LIMIT_RATE = 29.5;         // 상한가·하한가 판정 (수집 스크립트와 같은 기준)
+const BAR_SCALE = 30;            // 등락률 막대는 ±30%(가격제한폭) 고정 눈금 — 필터를 바꿔도 길이가 흔들리지 않는다
 
 const state = {
   market: 'all',                 // 'all' | 0 | 1
   type: 0,                       // 0=종목, 1=ETF, 2=ETN
-  tab: 'up',                     // up | down | value | volume | cap
-  sort: null,                    // 사용자가 열 머리글로 직접 정렬했을 때 { key, dir }
+  tab: 'up',                     // up | down | value | volume | cap | foreign | organ
+  sort: null,                    // 열 머리글로 직접 정렬했을 때 { key, dir }
   q: '',
   limit: PAGE,
   stocks: null,
   market_: null,
-  lastStamp: null,
+  flowMap: null,                 // code -> [외국인, 기관, 개인, 지분율, 외국인수량, 기관수량]
+  flowMeta: null,
 };
 
 /* ---------------- 숫자 포맷 ---------------- */
@@ -49,7 +52,6 @@ function fmtVol(v) {
 }
 
 const fmtRate = (r) => (r > 0 ? '+' : r < 0 ? '−' : '') + Math.abs(r).toFixed(2) + '%';
-const fmtChange = (c) => (c > 0 ? '+' : c < 0 ? '−' : '') + fmtInt(Math.abs(c));
 
 /** 등락 방향 → 글리프 + 클래스. 색만으로 뜻을 전하지 않기 위해 항상 글리프를 붙인다 */
 function dir(v) {
@@ -68,12 +70,18 @@ async function loadJSON(name) {
   return res.json();
 }
 
-async function refresh({ silent = false } = {}) {
-  if (!silent) document.body.classList.remove('stale');
+async function refresh() {
   try {
-    const [m, s] = await Promise.all([loadJSON('market'), loadJSON('stocks')]);
+    const [m, s, f] = await Promise.all([
+      loadJSON('market'),
+      loadJSON('stocks'),
+      // 수급은 부가 정보라, 없더라도 나머지 화면은 그대로 띄운다
+      loadJSON('flows').catch(() => null),
+    ]);
     state.market_ = m;
     state.stocks = s;
+    state.flowMap = f ? new Map(f.rows.map((r) => [r[0], r])) : null;
+    state.flowMeta = f;
     $('#errBox').innerHTML = '';
     document.body.classList.remove('stale');
     renderAll();
@@ -96,6 +104,7 @@ async function refresh({ silent = false } = {}) {
 function renderAll() {
   renderStamp();
   renderTiles();
+  renderBreadth();
   renderTable();
   renderHeat();
 }
@@ -124,53 +133,147 @@ function renderTiles() {
     lab.textContent = ix.name;
 
     const val = el('div', 'value');
-    val.textContent = ix.close === null ? '—' : ix.close.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    val.textContent = ix.close === null ? '—'
+      : ix.close.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     // 지수는 소수점 둘째 자리까지가 의미 있는 값이라 반올림하지 않는다
     const pt = Math.abs(ix.change).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const dl = el('div', 'delta ' + d.cls);
     dl.textContent = `${d.mark} ${pt} (${fmtRate(ix.rate)})`;
-    dl.setAttribute('aria-label', `전일 대비 ${d.word} ${Math.abs(ix.change)}포인트, ${fmtRate(ix.rate)}`);
+    dl.setAttribute('aria-label', `전일 대비 ${d.word} ${pt}포인트, ${fmtRate(ix.rate)}`);
 
     tile.append(lab, val, dl);
     box.append(tile);
   }
 }
 
+/* ----- 시장 온도계 ----- */
+
+function renderBreadth() {
+  const b = state.market_.breadth;
+  if (!b) return;
+
+  // 상한가·하한가는 그날 장세에서 가장 먼저 눈에 들어와야 할 숫자
+  const lim = $('#limits');
+  lim.textContent = '';
+  for (const [label, n, cls] of [['상한가', b.all.limitUp, 'up'], ['하한가', b.all.limitDown, 'down']]) {
+    const s = el('span');
+    const l = el('span', 'lbl');
+    l.textContent = label;
+    const v = el('b', n > 0 ? cls : 'flat');
+    v.textContent = fmtInt(n);
+    s.append(l, v);
+    lim.append(s);
+  }
+
+  const box = $('#breadth');
+  box.textContent = '';
+
+  for (const [name, t] of [['코스피', b.kospi], ['코스닥', b.kosdaq]]) {
+    const total = t.up + t.flat + t.down || 1;
+    const row = el('div', 'br-row');
+
+    const mkt = el('div', 'mkt');
+    mkt.textContent = name;
+
+    const bar = el('div', 'br-bar');
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label',
+      `${name} 상승 ${t.up}종목, 보합 ${t.flat}종목, 하락 ${t.down}종목`);
+
+    for (const [cls, n, word] of [['s-up', t.up, '상승'], ['s-flat', t.flat, '보합'], ['s-down', t.down, '하락']]) {
+      if (!n) continue;
+      const pct = (n / total) * 100;
+      const seg = el('div', 'br-seg ' + cls);
+      seg.style.width = pct + '%';
+      // 칸이 좁으면 숫자를 넣지 않는다 — 잘린 라벨보다 빈 칸이 낫고, 값은 아래 범례에 있다
+      if (pct >= 12) seg.textContent = fmtInt(n);
+      seg.title = `${word} ${fmtInt(n)}종목 (${pct.toFixed(1)}%)`;
+      bar.append(seg);
+    }
+
+    const tot = el('div', 'tot');
+    tot.textContent = `${fmtInt(total)}종목`;
+
+    row.append(mkt, bar, tot);
+    box.append(row);
+  }
+
+  // 색만으로 읽히지 않도록 범례를 항상 붙인다
+  const lg = el('div', 'br-legend');
+  const a = b.all;
+  for (const [cls, label, n] of [['k-up', '상승', a.up], ['k-flat', '보합', a.flat], ['k-down', '하락', a.down]]) {
+    const s = el('span');
+    const i = el('i', cls);
+    const txt = document.createTextNode(`${label} ${fmtInt(n)}`);
+    s.append(i, txt);
+    lg.append(s);
+  }
+  const ratio = el('span');
+  ratio.style.color = 'var(--text-muted)';
+  ratio.textContent = `상승 비중 ${((a.up / (a.up + a.flat + a.down || 1)) * 100).toFixed(0)}%`;
+  lg.append(ratio);
+  box.append(lg);
+}
+
 /* ----- 표 ----- */
 
 const COL = { code: 0, name: 1, market: 2, type: 3, price: 4, change: 5, rate: 6, volume: 7, value: 8, cap: 9 };
+const FLOW = { foreign: 1, organ: 2, individual: 3, holdRatio: 4, foreignQty: 5, organQty: 6 };
 
 const TAB_SORT = {
-  up:     { key: 'rate',   dir: -1, label: '등락률 높은 순' },
-  down:   { key: 'rate',   dir: 1,  label: '등락률 낮은 순' },
-  value:  { key: 'value',  dir: -1, label: '거래대금 많은 순' },
-  volume: { key: 'volume', dir: -1, label: '거래량 많은 순' },
-  cap:    { key: 'cap',    dir: -1, label: '시가총액 큰 순' },
+  up:      { key: 'rate',   dir: -1, label: '등락률 높은 순' },
+  down:    { key: 'rate',   dir: 1,  label: '등락률 낮은 순' },
+  value:   { key: 'value',  dir: -1, label: '거래대금 많은 순' },
+  volume:  { key: 'volume', dir: -1, label: '거래량 많은 순' },
+  cap:     { key: 'cap',    dir: -1, label: '시가총액 큰 순' },
+  foreign: { key: 'flow',   dir: -1, label: '외국인 순매수 많은 순' },
+  organ:   { key: 'flow',   dir: -1, label: '기관 순매수 많은 순' },
 };
 
+const isFlowTab = () => state.tab === 'foreign' || state.tab === 'organ';
+const flowIdx = () => (state.tab === 'organ' ? FLOW.organ : FLOW.foreign);
+
+/** 행의 정렬 키 값. 'flow' 는 현재 수급 탭이 가리키는 값 */
+function valueOf(row, key) {
+  if (key === 'flow') {
+    const f = state.flowMap?.get(row[COL.code]);
+    return f ? f[flowIdx()] : 0;
+  }
+  return row[COL[key]];
+}
+
 function filtered() {
-  const rows = state.stocks.rows;
   const q = state.q.trim().toLowerCase();
-  const mkt = state.market;
-  const ty = state.type;
+  const flowTab = isFlowTab();
 
   const out = [];
-  for (const r of rows) {
-    if (r[COL.type] !== ty) continue;
-    if (mkt !== 'all' && r[COL.market] !== mkt) continue;
+  for (const r of state.stocks.rows) {
+    if (r[COL.type] !== state.type) continue;
+    if (state.market !== 'all' && r[COL.market] !== state.market) continue;
     if (q && !(r[COL.name].toLowerCase().includes(q) || r[COL.code].includes(q))) continue;
+    // 수급 탭에서는 수집 대상(거래대금 상위)만 의미가 있다
+    if (flowTab && !state.flowMap?.has(r[COL.code])) continue;
     out.push(r);
   }
 
   const s = state.sort ?? TAB_SORT[state.tab];
-  const i = COL[s.key];
   if (s.key === 'name') {
-    out.sort((a, b) => s.dir * a[i].localeCompare(b[i], 'ko'));
+    out.sort((a, b) => s.dir * a[COL.name].localeCompare(b[COL.name], 'ko'));
   } else {
-    out.sort((a, b) => s.dir * (a[i] - b[i]));
+    out.sort((a, b) => s.dir * (valueOf(a, s.key) - valueOf(b, s.key)));
   }
   return out;
+}
+
+/** 등락률 강도 막대 — ±30% 고정 눈금 */
+function rateBar(rate) {
+  const bar = el('span', 'bar');
+  const fill = el('i', rate < 0 ? 'f-down' : 'f-up');
+  fill.style.width = Math.min(100, (Math.abs(rate) / BAR_SCALE) * 100) + '%';
+  bar.append(fill);
+  bar.setAttribute('aria-hidden', 'true');   // 값은 바로 옆 숫자가 이미 말한다
+  return bar;
 }
 
 function renderTable() {
@@ -178,13 +281,28 @@ function renderTable() {
   const body = $('#tbody');
   body.textContent = '';
 
+  const flowTab = isFlowTab();
+  $('#flowTh').hidden = !flowTab;
+  $('#flowTh').firstChild.textContent = state.tab === 'organ' ? '기관 순매수' : '외국인 순매수';
+
+  const hint = $('#tabHint');
+  if (flowTab) {
+    hint.hidden = false;
+    hint.textContent =
+      `거래대금 상위 ${fmtInt(state.flowMeta?.universe ?? 500)}종목만 수집합니다. ` +
+      '순매수 금액은 순매수 수량 × 종가로 추정한 값이며, 열 머리글을 누르면 순매도 상위로 뒤집힙니다.';
+  } else {
+    hint.hidden = true;
+  }
+
+  const colCount = flowTab ? 9 : 8;
   const shown = rows.slice(0, state.limit);
   const TYPE_TAG = { 1: 'ETF', 2: 'ETN' };
 
   if (!shown.length) {
     const tr = el('tr');
     const td = el('td');
-    td.colSpan = 8;
+    td.colSpan = colCount;
     td.className = 'empty';
     td.textContent = state.q ? `"${state.q}"에 해당하는 종목이 없습니다.` : '표시할 종목이 없습니다.';
     tr.append(td);
@@ -192,7 +310,8 @@ function renderTable() {
   }
 
   shown.forEach((r, idx) => {
-    const d = dir(r[COL.rate]);
+    const rate = r[COL.rate];
+    const d = dir(rate);
     const tr = el('tr');
 
     const rank = el('td', 'rank');
@@ -209,26 +328,50 @@ function renderTable() {
       tag.textContent = TYPE_TAG[r[COL.type]];
       name.append(tag);
     }
+    if (rate >= LIMIT_RATE || rate <= -LIMIT_RATE) {
+      const bg = el('span', 'limit ' + (rate > 0 ? 'limit-up' : 'limit-down'));
+      bg.textContent = rate > 0 ? '상한가' : '하한가';
+      name.append(bg);
+    }
+
+    // 등락률 — 숫자 + 강도 막대
+    const rateTd = el('td', 'c-rate');
+    const cell = el('span', 'rate-cell');
+    const numSpan = el('span', 'rate-num ' + d.cls);
+    numSpan.textContent = `${d.mark} ${Math.abs(rate).toFixed(2)}%`;
+    cell.append(numSpan, rateBar(rate));
+    rateTd.append(cell);
 
     const price = el('td');
     price.textContent = fmtInt(r[COL.price]);
 
-    const chg = el('td', d.cls);
+    const chg = el('td', 'c-sub ' + d.cls);
     chg.textContent = `${d.mark} ${fmtInt(Math.abs(r[COL.change]))}`;
 
-    const rate = el('td', d.cls);
-    rate.textContent = fmtRate(r[COL.rate]);
-
-    const vol = el('td');
-    vol.textContent = fmtVol(r[COL.volume]);
-
-    const val = el('td');
+    const val = el('td', 'c-key');
     val.textContent = fmtWon(r[COL.value]);
 
-    const cap = el('td');
+    const vol = el('td', 'c-sub');
+    vol.textContent = fmtVol(r[COL.volume]);
+
+    const cap = el('td', 'c-sub');
     cap.textContent = fmtWon(r[COL.cap]);
 
-    tr.append(rank, name, price, chg, rate, vol, val, cap);
+    tr.append(rank, name, rateTd, price, chg, val, vol, cap);
+
+    if (flowTab) {
+      const f = state.flowMap.get(r[COL.code]);
+      const amount = f ? f[flowIdx()] : 0;
+      const fd = dir(amount);
+      const td = el('td', 'c-key ' + fd.cls);
+      td.textContent = `${fd.mark} ${fmtWon(Math.abs(amount))}`;
+      const qty = f ? f[state.tab === 'organ' ? FLOW.organQty : FLOW.foreignQty] : 0;
+      td.title = `${state.tab === 'organ' ? '기관' : '외국인'} 순${amount < 0 ? '매도' : '매수'} ` +
+        `${fmtInt(Math.abs(qty))}주 (추정 ${fmtWon(Math.abs(amount))})` +
+        (f?.[FLOW.holdRatio] != null ? ` · 외국인 지분율 ${f[FLOW.holdRatio]}%` : '');
+      tr.append(td);
+    }
+
     body.append(tr);
   });
 
@@ -241,12 +384,13 @@ function renderTable() {
 
   document.querySelectorAll('th.sortable').forEach((th) => {
     const key = th.dataset.sort;
+    const arrow = th.querySelector('.arrow');
     if (key === s.key) {
       th.setAttribute('aria-sort', s.dir === -1 ? 'descending' : 'ascending');
-      th.querySelector('.arrow').textContent = s.dir === -1 ? '▼' : '▲';
+      arrow.textContent = s.dir === -1 ? '▼' : '▲';
     } else {
       th.removeAttribute('aria-sort');
-      th.querySelector('.arrow').textContent = '';
+      arrow.textContent = '';
     }
   });
 }
@@ -358,8 +502,9 @@ $('#heat').addEventListener('focusout', hideTip);
 function bindSeg(attr, onPick) {
   document.querySelectorAll(`[data-${attr}]`).forEach((btn) => {
     btn.addEventListener('click', () => {
-      const group = btn.parentElement.querySelectorAll(`[data-${attr}]`);
-      group.forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+      if (btn.disabled) return;
+      btn.parentElement.querySelectorAll(`[data-${attr}]`)
+        .forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
       onPick(btn.dataset[attr]);
       state.limit = PAGE;
       if (state.stocks) renderTable();
@@ -369,7 +514,18 @@ function bindSeg(attr, onPick) {
 
 bindSeg('market', (v) => { state.market = v === 'all' ? 'all' : Number(v); });
 bindSeg('type', (v) => { state.type = Number(v); });
-bindSeg('tab', (v) => { state.tab = v; state.sort = null; });
+bindSeg('tab', (v) => {
+  state.tab = v;
+  state.sort = null;
+  // 수급은 주식만 있어 ETF·ETN 선택이 의미가 없다 — 종목으로 되돌리고 잠근다
+  const lock = isFlowTab();
+  $('#typeSeg').querySelectorAll('[data-type]').forEach((b) => {
+    const isStock = b.dataset.type === '0';
+    b.disabled = lock && !isStock;
+    if (lock) b.setAttribute('aria-pressed', String(isStock));
+  });
+  if (lock) state.type = 0;
+});
 
 let qTimer;
 $('#q').addEventListener('input', (e) => {
@@ -424,7 +580,7 @@ $('#themeBtn').addEventListener('click', () => {
 /* ---------------- 시작 ---------------- */
 
 refresh();
-setInterval(() => refresh({ silent: true }), REFRESH_MS);
+setInterval(refresh, REFRESH_MS);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') refresh({ silent: true });
+  if (document.visibilityState === 'visible') refresh();
 });

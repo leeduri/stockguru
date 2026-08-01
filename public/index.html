@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>한국주식 대시보드 — 실시간 국내 증시 시세</title>
-<meta name="description" content="코스피·코스닥 지수와 상승률·하락률·거래대금·거래량·시가총액 상위 종목, 업종별 등락을 한 화면에서 봅니다.">
+<title>한국주식 대시보드 — 국내 증시 한눈에</title>
+<meta name="description" content="코스피·코스닥 지수와 시장 온도계, 외국인·기관 순매수, 상승률·거래대금 상위 종목, 업종별 등락을 한 화면에서 봅니다.">
 <meta name="color-scheme" content="light dark">
 <meta property="og:title" content="한국주식 대시보드">
-<meta property="og:description" content="코스피·코스닥 시세와 업종별 등락을 한 화면에서.">
+<meta property="og:description" content="시장 온도계 · 외국인/기관 수급 · 종목 순위 · 업종 등락을 한 화면에서.">
 <meta property="og:type" content="website">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%239e3432'/><path d='M7 21l6-7 4 4 8-9' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
@@ -37,25 +37,22 @@
     <div class="tiles" id="tiles"></div>
   </section>
 
+  <!-- 시장 온도계: 지수 숫자만으로는 안 보이는 체감 장세 -->
+  <section aria-labelledby="brH">
+    <div class="sec-head">
+      <h2 id="brH">시장 온도계</h2>
+      <span class="sub">등락 종목 수</span>
+      <div class="spacer"></div>
+      <div class="limits" id="limits"></div>
+    </div>
+    <div class="card breadth" id="breadth"></div>
+  </section>
+
   <!-- 필터 행: 아래 표 전체를 한 번에 스코프한다 -->
   <section aria-labelledby="rankH">
     <div class="sec-head">
       <h2 id="rankH">종목 순위</h2>
       <span class="sub" id="rankSub"></span>
-    </div>
-
-    <div class="filters">
-      <div class="seg" role="group" aria-label="시장 선택">
-        <button type="button" data-market="all" aria-pressed="true">전체</button>
-        <button type="button" data-market="0" aria-pressed="false">코스피</button>
-        <button type="button" data-market="1" aria-pressed="false">코스닥</button>
-      </div>
-      <div class="seg" role="group" aria-label="종류 선택">
-        <button type="button" data-type="0" aria-pressed="true">종목</button>
-        <button type="button" data-type="1" aria-pressed="false">ETF</button>
-        <button type="button" data-type="2" aria-pressed="false">ETN</button>
-      </div>
-      <input class="search" id="q" type="search" placeholder="종목명 또는 코드 검색" aria-label="종목명 또는 코드 검색" autocomplete="off">
     </div>
 
     <div class="filters">
@@ -65,8 +62,26 @@
         <button type="button" data-tab="value" aria-pressed="false">거래대금</button>
         <button type="button" data-tab="volume" aria-pressed="false">거래량</button>
         <button type="button" data-tab="cap" aria-pressed="false">시가총액</button>
+        <button type="button" data-tab="foreign" aria-pressed="false">외국인 순매수</button>
+        <button type="button" data-tab="organ" aria-pressed="false">기관 순매수</button>
       </div>
     </div>
+
+    <div class="filters">
+      <div class="seg" role="group" aria-label="시장 선택">
+        <button type="button" data-market="all" aria-pressed="true">전체</button>
+        <button type="button" data-market="0" aria-pressed="false">코스피</button>
+        <button type="button" data-market="1" aria-pressed="false">코스닥</button>
+      </div>
+      <div class="seg" role="group" aria-label="종류 선택" id="typeSeg">
+        <button type="button" data-type="0" aria-pressed="true">종목</button>
+        <button type="button" data-type="1" aria-pressed="false">ETF</button>
+        <button type="button" data-type="2" aria-pressed="false">ETN</button>
+      </div>
+      <input class="search" id="q" type="search" placeholder="종목명 또는 코드 검색" aria-label="종목명 또는 코드 검색" autocomplete="off">
+    </div>
+
+    <p class="hint" id="tabHint" hidden></p>
 
     <div class="card">
       <div class="scroll">
@@ -76,12 +91,13 @@
             <tr>
               <th scope="col">#</th>
               <th scope="col" class="sortable" data-sort="name">종목<span class="arrow"></span></th>
+              <th scope="col" class="sortable c-key" data-sort="rate">등락률<span class="arrow"></span></th>
               <th scope="col" class="sortable" data-sort="price">현재가<span class="arrow"></span></th>
-              <th scope="col" class="sortable" data-sort="change">전일대비<span class="arrow"></span></th>
-              <th scope="col" class="sortable" data-sort="rate">등락률<span class="arrow"></span></th>
-              <th scope="col" class="sortable" data-sort="volume">거래량<span class="arrow"></span></th>
-              <th scope="col" class="sortable" data-sort="value">거래대금<span class="arrow"></span></th>
-              <th scope="col" class="sortable" data-sort="cap">시가총액<span class="arrow"></span></th>
+              <th scope="col" class="sortable c-sub" data-sort="change">전일대비<span class="arrow"></span></th>
+              <th scope="col" class="sortable c-key" data-sort="value">거래대금<span class="arrow"></span></th>
+              <th scope="col" class="sortable c-sub" data-sort="volume">거래량<span class="arrow"></span></th>
+              <th scope="col" class="sortable c-sub" data-sort="cap">시가총액<span class="arrow"></span></th>
+              <th scope="col" class="sortable c-key" data-sort="flow" id="flowTh" hidden>순매수<span class="arrow"></span></th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -138,6 +154,7 @@
 
   <footer>
     <p>데이터 출처: 네이버 금융 공개 엔드포인트. 이 사이트는 네이버와 무관합니다.</p>
+    <p>순매수 금액은 순매수 수량에 종가를 곱한 추정치이며, 거래대금 상위 500종목만 수집합니다.</p>
     <p>수치는 지연될 수 있으며 오류가 있을 수 있습니다. 정보 제공 목적이며 투자 권유가 아닙니다.</p>
   </footer>
 </div>
