@@ -1,0 +1,47 @@
+name: 시세 수집 & 배포
+
+on:
+  schedule:
+    # cron 은 UTC. KST = UTC+9 이므로 00:00~06:55 UTC = 09:00~15:55 KST (장중)
+    - cron: '*/5 0-6 * * 1-5'
+    # 16:10 KST — 장 마감 확정치 한 번 더
+    - cron: '10 7 * * 1-5'
+  workflow_dispatch:        # 수동 실행 버튼
+  push:
+    branches: [main]        # 코드 고치면 바로 반영
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 앞선 실행을 취소하지 않고 순서대로 처리한다 (배포가 겹치면 실패하므로)
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 시세 수집
+        run: node scripts/fetch.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Pages 배포
+        id: deploy
+        uses: actions/deploy-pages@v4

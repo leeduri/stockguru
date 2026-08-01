@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+Thumbs.db
+
+# 수집 결과는 Actions 가 매번 새로 굽는다 — 저장소에 커밋하지 않는다
+public/data/*.json
