@@ -36,7 +36,11 @@ jobs:
       - name: 시세 수집
         run: node scripts/fetch.js
 
+      # enablement: 저장소에 Pages 가 꺼져 있으면 워크플로가 직접 켠다
+      # (Settings > Pages 에서 손으로 "GitHub Actions" 를 고르지 않아도 되게)
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
