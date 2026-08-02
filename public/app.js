@@ -715,6 +715,7 @@ const detail = {
   code: null,
   data: null,        // data/stock/{code}.json
   range: 60,         // 차트에 그릴 최근 영업일 수 (0 = 전체)
+  ctype: 'candle',   // candle | line
   theme: null,       // 비중 표에 띄운 테마 번호
   themes: null,      // themes.json (처음 열 때 한 번만 받는다)
   cache: new Map(),
@@ -752,6 +753,7 @@ function renderChart() {
   if (!all.length) {
     box.innerHTML = '';
     note.hidden = false;
+    $('#dVolNote').hidden = true;
     note.textContent = state.market_?.detailCodes?.includes(detail.code)
       ? '이 종목의 일봉 데이터를 받지 못했습니다.'
       : '차트와 재무 지표는 거래대금·시가총액·등락률 상위 종목만 수집합니다. 이 종목은 대상 밖입니다.';
@@ -759,56 +761,99 @@ function renderChart() {
     return;
   }
   note.hidden = true;
+  $('#dVolNote').hidden = false;
 
   const rows = detail.range > 0 ? all.slice(-detail.range) : all;
+  const candle = detail.ctype === 'candle';
   const closes = rows.map((r) => r[4]);
   const first = closes[0];
   const last = closes[closes.length - 1];
   const ret = first ? ((last - first) / first) * 100 : 0;
   const d = dir(ret);
-  // 선 색은 기간 수익률의 부호를 따른다. 바로 옆에 수익률을 숫자로 같이 쓴다
   const stroke = ret < 0 ? 'var(--dn-2)' : ret > 0 ? 'var(--up-2)' : 'var(--axis)';
 
-  $('#dChartSub').innerHTML = '';
   const sub = $('#dChartSub');
   sub.textContent = `${rows.length}거래일 · 기간 수익률 `;
   const retEl = el('b', d.cls);
   retEl.textContent = `${d.mark} ${Math.abs(ret).toFixed(2)}%`;
   sub.append(retEl);
 
-  const W = 900, H = 250, PL = 60, PR = 66, PT = 14, PB = 26;
-  const iw = W - PL - PR, ih = H - PT - PB;
-  let lo = Math.min(...closes), hi = Math.max(...closes);
-  const pad = (hi - lo) * 0.1 || Math.abs(hi) * 0.02 || 1;
+  // 가격 패널 위에 거래량 패널을 따로 두고, x축은 둘이 공유한다
+  const W = 900, H = 320, PL = 60, PR = 66, PT = 14, PB = 26;
+  const VOL_H = 64, GAP = 12;
+  const iw = W - PL - PR;
+  const ph = H - PT - PB - VOL_H - GAP;   // 가격 패널 높이
+  const volTop = PT + ph + GAP;
+
+  // 캔들은 고가·저가까지 보이므로 y 범위를 그 기준으로 잡는다
+  let lo = candle ? Math.min(...rows.map((r) => r[3])) : Math.min(...closes);
+  let hi = candle ? Math.max(...rows.map((r) => r[2])) : Math.max(...closes);
+  const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.02 || 1;
   lo -= pad; hi += pad;
 
-  const X = (i) => PL + (rows.length === 1 ? iw / 2 : (i / (rows.length - 1)) * iw);
-  const Y = (v) => PT + ih - ((v - lo) / (hi - lo)) * ih;
+  const n = rows.length;
+  const X = (i) => PL + (n === 1 ? iw / 2 : (i / (n - 1)) * iw);
+  const Y = (v) => PT + ph - ((v - lo) / (hi - lo)) * ph;
 
-  const line = closes.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
-  const area = `${line}L${X(rows.length - 1).toFixed(1)},${(PT + ih).toFixed(1)}L${X(0).toFixed(1)},${(PT + ih).toFixed(1)}Z`;
+  const maxVol = Math.max(...rows.map((r) => r[5]), 1);
+  const VY = (v) => volTop + VOL_H - (v / maxVol) * VOL_H;
+
+  // 캔들 몸통 두께 — 봉 간격의 66%, 최소 1px 최대 12px
+  const slot = n > 1 ? iw / (n - 1) : iw;
+  const bw = Math.max(1, Math.min(12, slot * 0.66));
+
+  /** 그날 종가가 시가보다 높으면 상승(빨강), 낮으면 하락(파랑) */
+  const upDay = (r) => (r[4] === r[1] ? 0 : r[4] > r[1] ? 1 : -1);
+  const dayColor = (r) => (upDay(r) > 0 ? 'var(--up-2)' : upDay(r) < 0 ? 'var(--dn-2)' : 'var(--axis)');
 
   const yTicks = niceTicks(lo, hi, 4);
-  const xIdx = [...new Set([0, Math.round((rows.length - 1) / 3), Math.round(((rows.length - 1) * 2) / 3), rows.length - 1])];
+  const xIdx = [...new Set([0, Math.round((n - 1) / 3), Math.round(((n - 1) * 2) / 3), n - 1])];
+
+  let priceMarks;
+  if (candle) {
+    priceMarks = rows.map((r, i) => {
+      const x = X(i);
+      const c = dayColor(r);
+      const yO = Y(r[1]), yC = Y(r[4]);
+      const top = Math.min(yO, yC);
+      const h = Math.max(1, Math.abs(yC - yO));   // 십자형 도지도 1px 은 보이게
+      return `<line x1="${x.toFixed(1)}" y1="${Y(r[2]).toFixed(1)}" x2="${x.toFixed(1)}" y2="${Y(r[3]).toFixed(1)}" stroke="${c}" stroke-width="1"/>`
+        + `<rect x="${(x - bw / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}"/>`;
+    }).join('');
+  } else {
+    const line = closes.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+    const area = `${line}L${X(n - 1).toFixed(1)},${(PT + ph).toFixed(1)}L${X(0).toFixed(1)},${(PT + ph).toFixed(1)}Z`;
+    priceMarks = `<path class="price-area" d="${area}" fill="${stroke}"/><path class="price-line" d="${line}" stroke="${stroke}"/>`
+      + `<circle class="end-dot" cx="${X(n - 1).toFixed(1)}" cy="${Y(last).toFixed(1)}" r="4" fill="${stroke}"/>`;
+  }
+
+  const volMarks = rows.map((r, i) =>
+    `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${VY(r[5]).toFixed(1)}" width="${bw.toFixed(1)}" height="${(volTop + VOL_H - VY(r[5])).toFixed(1)}" fill="${dayColor(r)}"/>`,
+  ).join('');
 
   box.innerHTML = `
-<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="최근 ${rows.length}거래일 종가 흐름. 기간 수익률 ${ret.toFixed(2)}퍼센트">
+<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="최근 ${n}거래일 ${candle ? '일봉' : '종가'} 차트와 거래량. 기간 수익률 ${ret.toFixed(2)}퍼센트">
   ${yTicks.map((v) => `<line class="grid-line" x1="${PL}" y1="${Y(v).toFixed(1)}" x2="${PL + iw}" y2="${Y(v).toFixed(1)}"/>`).join('')}
   ${yTicks.map((v) => `<text class="tick-txt" x="${PL - 8}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end">${fmtInt(v)}</text>`).join('')}
-  <line class="axis-line" x1="${PL}" y1="${PT + ih}" x2="${PL + iw}" y2="${PT + ih}"/>
-  ${xIdx.map((i) => `<text class="tick-txt" x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === rows.length - 1 ? 'end' : 'middle'}">${shortDate(rows[i][0])}</text>`).join('')}
-  <path class="price-area" d="${area}" fill="${stroke}"/>
-  <path class="price-line" d="${line}" stroke="${stroke}"/>
-  <circle class="end-dot" cx="${X(rows.length - 1).toFixed(1)}" cy="${Y(last).toFixed(1)}" r="4" fill="${stroke}"/>
-  <text class="end-label" x="${(X(rows.length - 1) + 8).toFixed(1)}" y="${(Y(last) + 4).toFixed(1)}" fill="${stroke}">${fmtInt(last)}</text>
+  <line class="axis-line" x1="${PL}" y1="${PT + ph}" x2="${PL + iw}" y2="${PT + ph}"/>
+  ${priceMarks}
+  <text class="end-label" x="${(X(n - 1) + 8).toFixed(1)}" y="${(Y(last) + 4).toFixed(1)}" fill="${stroke}">${fmtInt(last)}</text>
+
+  <text class="tick-txt" x="${PL - 8}" y="${(volTop + 9).toFixed(1)}" text-anchor="end">${fmtVol(maxVol)}</text>
+  <text class="tick-txt" x="${PL - 8}" y="${(volTop + VOL_H + 3).toFixed(1)}" text-anchor="end">거래량</text>
+  <line class="axis-line" x1="${PL}" y1="${volTop + VOL_H}" x2="${PL + iw}" y2="${volTop + VOL_H}"/>
+  ${volMarks}
+
+  ${xIdx.map((i) => `<text class="tick-txt" x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}">${shortDate(rows[i][0])}</text>`).join('')}
+
   <g id="crosshair" style="display:none">
-    <line class="cross-line" y1="${PT}" y2="${PT + ih}"/>
+    <line class="cross-line" y1="${PT}" y2="${volTop + VOL_H}"/>
     <circle class="cross-dot" r="4.5" fill="${stroke}"/>
   </g>
-  <rect class="hit" x="${PL}" y="${PT}" width="${iw}" height="${ih}"/>
+  <rect class="hit" x="${PL}" y="${PT}" width="${iw}" height="${volTop + VOL_H - PT}"/>
 </svg>`;
 
-  // 십자선 + 툴팁 — 선 차트는 값을 짚어 읽을 수 있어야 한다
+  // 십자선 + 툴팁 — 값을 짚어 읽을 수 있어야 한다
   const svg = box.querySelector('svg');
   const hit = box.querySelector('.hit');
   const cross = box.querySelector('#crosshair');
@@ -818,8 +863,8 @@ function renderChart() {
   const at = (clientX) => {
     const b = svg.getBoundingClientRect();
     const vx = ((clientX - b.left) / b.width) * W;
-    const t = rows.length === 1 ? 0 : Math.round(((vx - PL) / iw) * (rows.length - 1));
-    return Math.max(0, Math.min(rows.length - 1, t));
+    const t = n === 1 ? 0 : Math.round(((vx - PL) / iw) * (n - 1));
+    return Math.max(0, Math.min(n - 1, t));
   };
 
   const move = (e) => {
@@ -830,19 +875,70 @@ function renderChart() {
     cLine.setAttribute('x2', X(i).toFixed(1));
     cDot.setAttribute('cx', X(i).toFixed(1));
     cDot.setAttribute('cy', Y(r[4]).toFixed(1));
+
     const prev = i > 0 ? rows[i - 1][4] : r[4];
     const chg = r[4] - prev;
     const cd = dir(chg);
+    const intra = r[1] ? ((r[4] - r[1]) / r[1]) * 100 : 0;
+    const id2 = dir(intra);
     showTip([
       ['t-nm', `${r[0].slice(0, 4)}.${r[0].slice(4, 6)}.${r[0].slice(6, 8)}`],
-      ['t-row', `종가 ${fmtInt(r[4])}  (${cd.mark} ${fmtInt(Math.abs(chg))})`],
+      ['t-row', `종가 ${fmtInt(r[4])}  (전일 ${cd.mark} ${fmtInt(Math.abs(chg))})`],
       ['t-row', `시 ${fmtInt(r[1])} · 고 ${fmtInt(r[2])} · 저 ${fmtInt(r[3])}`],
-      ['t-row', `거래량 ${fmtVol(r[5])}`],
+      ['t-row', `거래량 ${fmtVol(r[5])} · 이 기간 최대치의 ${(r[5] / (maxVol || 1) * 100).toFixed(0)}%`],
+      ['t-row', `시가 대비 ${id2.mark} ${Math.abs(intra).toFixed(2)}% (막대 색이 따르는 값)`],
     ], e.clientX, e.clientY);
   };
 
   hit.addEventListener('pointermove', move);
   hit.addEventListener('pointerleave', () => { cross.style.display = 'none'; hideTip(); });
+}
+
+/* ----- 호가잔량 ----- */
+
+function renderBook() {
+  const book = detail.data?.book;
+  const sec = $('#dBookSec');
+  if (!book || !(book.totalBuy + book.totalSell)) { sec.hidden = true; return; }
+  sec.hidden = false;
+
+  const total = book.totalBuy + book.totalSell;
+  const buyPct = (book.totalBuy / total) * 100;
+  const open = state.market_?.status === 'OPEN';
+  $('#dBookSub').textContent = open
+    ? '체결된 양이 아니라 지금 대기 중인 주문량'
+    : '장 마감 시점에 남아 있던 대기 주문량';
+
+  const maxLv = Math.max(...book.sell.map((l) => l[1]), ...book.buy.map((l) => l[1]), 1);
+  const row = (price, count, side) => `
+<tr class="lv ${side}">
+  <td class="lv-price">${fmtInt(price)}</td>
+  <td class="lv-bar"><span class="bar"><i class="${side === 'sell' ? 'f-down' : 'f-up'}" style="width:${((count / maxLv) * 100).toFixed(1)}%"></i></span></td>
+  <td class="lv-count">${fmtInt(count)}</td>
+</tr>`;
+
+  $('#dBook').innerHTML = `
+<div class="book-split">
+  <div class="book-bar" role="img" aria-label="매수잔량 ${fmtInt(book.totalBuy)}주, 매도잔량 ${fmtInt(book.totalSell)}주">
+    <span class="s-buy" style="width:${buyPct.toFixed(1)}%"></span>
+    <span class="s-sell" style="width:${(100 - buyPct).toFixed(1)}%"></span>
+  </div>
+  <div class="book-ends">
+    <span class="up">매수잔량 <b>${fmtInt(book.totalBuy)}</b>주 · ${buyPct.toFixed(1)}%</span>
+    <span class="down">${(100 - buyPct).toFixed(1)}% · <b>${fmtInt(book.totalSell)}</b>주 매도잔량</span>
+  </div>
+</div>
+<div class="scroll">
+  <table class="book-tbl">
+    <caption class="sr-only">매도호가와 매수호가 각 5단계의 잔량</caption>
+    <thead><tr><th scope="col">호가</th><th scope="col">잔량 분포</th><th scope="col">잔량(주)</th></tr></thead>
+    <tbody>
+      ${book.sell.map((l) => row(l[0], l[1], 'sell')).join('')}
+      <tr class="lv-mid"><td colspan="3">↑ 매도호가 &nbsp;·&nbsp; ↓ 매수호가</td></tr>
+      ${book.buy.map((l) => row(l[0], l[1], 'buy')).join('')}
+    </tbody>
+  </table>
+</div>`;
 }
 
 /* ----- 52주 위치 ----- */
@@ -1096,6 +1192,7 @@ async function openDetail(code) {
   detail.data = detail.cache.get(code);
 
   renderChart();
+  renderBook();
   renderMeter();
   renderIndicators();
   $('#dIndSec').hidden = !detail.data;
@@ -1142,6 +1239,14 @@ document.querySelectorAll('[data-range]').forEach((b) => {
   b.addEventListener('click', () => {
     document.querySelectorAll('[data-range]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
     detail.range = Number(b.dataset.range);
+    renderChart();
+  });
+});
+
+document.querySelectorAll('[data-ctype]').forEach((b) => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('[data-ctype]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    detail.ctype = b.dataset.ctype;
     renderChart();
   });
 });

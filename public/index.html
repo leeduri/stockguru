@@ -186,6 +186,10 @@
           <h3>주가 흐름</h3>
           <span class="sub" id="dChartSub"></span>
           <div class="spacer"></div>
+          <div class="seg small" role="group" aria-label="차트 종류">
+            <button type="button" data-ctype="candle" aria-pressed="true">캔들</button>
+            <button type="button" data-ctype="line" aria-pressed="false">선</button>
+          </div>
           <div class="seg small" role="group" aria-label="차트 기간">
             <button type="button" data-range="20" aria-pressed="false">1개월</button>
             <button type="button" data-range="60" aria-pressed="true">3개월</button>
@@ -195,6 +199,19 @@
         </div>
         <div class="chart-box" id="dChart"></div>
         <p class="hint" id="dChartNote" hidden></p>
+        <p class="hint" id="dVolNote">
+          아래 막대는 <b>거래량</b>입니다. 그날 종가가 시가보다 오르면 빨강, 내리면 파랑으로 칠했습니다 —
+          매수·매도 체결량을 나눈 값이 아닙니다. 국내 공개 데이터에는 일별 매수/매도 체결량 분리가 없습니다.
+          실제 매수·매도는 아래 <b>호가잔량</b>과 <b>수급</b>을 보세요.
+        </p>
+      </section>
+
+      <section class="d-sec" id="dBookSec">
+        <div class="d-head">
+          <h3>호가잔량 (매수·매도 대기 물량)</h3>
+          <span class="sub" id="dBookSub"></span>
+        </div>
+        <div class="card book" id="dBook"></div>
       </section>
 
       <section class="d-sec" id="dMeterSec">

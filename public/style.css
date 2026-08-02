@@ -451,6 +451,10 @@ td.c-rate { padding-right: 12px; }
   text-align: right;
 }
 .bar {
+  /* span 이라 inline-block 을 못 박아야 한다. 인라인이면 width·height 가 무시된다
+     (flex 자식일 때는 자동으로 블록화돼 티가 안 나지만, 표 칸 안에서는 사라진다) */
+  display: inline-block;
+  vertical-align: middle;
   flex: none;
   width: 56px;
   height: 8px;
@@ -701,6 +705,48 @@ tbody tr { cursor: pointer; }
 .end-dot { stroke: var(--surface-1); stroke-width: 2; }
 .end-label { font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .hit { fill: transparent; }
+
+/* 호가잔량 */
+.book { padding: 16px 18px; }
+.book-bar {
+  display: flex;
+  gap: 2px;              /* 두 덩어리는 테두리가 아니라 표면 간격이 가른다 */
+  height: 20px;
+  margin-bottom: 8px;
+}
+.book-bar span { height: 100%; min-width: 2px; }
+.book-bar .s-buy { background: var(--up-2); border-radius: 4px 0 0 4px; }
+.book-bar .s-sell { background: var(--dn-2); border-radius: 0 4px 4px 0; }
+.book-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+.book-ends b { font-weight: 650; }
+
+.book-tbl { margin-top: 14px; font-size: 13px; }
+.book-tbl th { text-align: right; }
+.book-tbl th:nth-child(2) { text-align: left; }
+.book-tbl td { padding: 5px 12px; border-bottom: 0; }
+.book-tbl .lv-price { text-align: right; width: 96px; font-weight: 600; }
+.book-tbl .lv-count { text-align: right; width: 110px; font-variant-numeric: tabular-nums; }
+/* 전역 tbody td 는 우측 정렬이라, 막대가 머리글과 어긋나지 않게 되돌린다 */
+.book-tbl .lv-bar { width: auto; text-align: left; }
+.book-tbl .lv-bar .bar { width: 100%; max-width: 260px; height: 10px; }
+.book-tbl .lv.sell .lv-price { color: var(--dn-ink); }
+.book-tbl .lv.buy .lv-price { color: var(--up-ink); }
+.book-tbl .lv-mid td {
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 8px 12px;
+  border-top: 1px solid var(--gridline);
+  border-bottom: 1px solid var(--gridline);
+}
 
 /* 52주 위치 미터 — 채움은 같은 램프의 진한 스텝, 트랙은 옅은 스텝 */
 .meter {

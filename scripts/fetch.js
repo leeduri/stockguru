@@ -173,12 +173,14 @@ async function fetchDetails(codes, nameByCode) {
   const end = KST_DATE(0);
 
   return pool(codes, 8, async (code) => {
-    const [info, chartText] = await Promise.all([
+    const [info, chartText, asking] = await Promise.all([
       getJSON(`https://m.stock.naver.com/api/stock/${code}/integration`, 2),
       fetch(
         `https://api.finance.naver.com/siseJson.naver?symbol=${code}&requestType=1&startTime=${start}&endTime=${end}&timeframe=day`,
         { headers: HEADERS, signal: AbortSignal.timeout(20_000) },
       ).then((r) => (r.ok ? r.text() : null)).catch(() => null),
+      // 호가잔량 — 체결된 양이 아니라 "대기 중인" 매수·매도 물량이다
+      getJSON(`https://m.stock.naver.com/api/stock/${code}/askingPrice`, 2).catch(() => null),
     ]);
 
     const indicators = {};
@@ -187,12 +189,23 @@ async function fetchDetails(codes, nameByCode) {
     let chart = [];
     if (chartText) { try { chart = parseSiseJson(chartText); } catch { chart = []; } }
 
+    const level = (x) => [num(x.price) ?? 0, num(x.count) ?? 0];
+    const book = asking?.totalBuy && asking?.totalSell
+      ? {
+        totalBuy: num(asking.totalBuy) ?? 0,     // 총 매수잔량 (주)
+        totalSell: num(asking.totalSell) ?? 0,   // 총 매도잔량 (주)
+        sell: (asking.sellInfo ?? []).map(level),   // 매도호가 5단계 (가격 내림차순)
+        buy: (asking.buyInfos ?? []).map(level),    // 매수호가 5단계 (가격 내림차순)
+      }
+      : null;
+
     return {
       code,
       name: nameByCode.get(code) ?? info?.stockName ?? code,
       indicators,
       chartCols: ['date', 'open', 'high', 'low', 'close', 'volume'],
       chart,
+      book,
     };
   });
 }
@@ -424,7 +437,7 @@ async function main() {
       `      연속 순매수 3일↑ 외국인 ${cnt(7, 3)} / 기관 ${cnt(9, 3)} · 7일↑ 외국인 ${cnt(7, 7)} / 기관 ${cnt(9, 7)}\n` +
       `      연속 순매도 3일↑ 외국인 ${cnt(7, -3)} / 기관 ${cnt(9, -3)} · 7일↑ 외국인 ${cnt(7, -7)} / 기관 ${cnt(9, -7)}\n` +
       `      테마 ${themes.length}개 (구성종목 ${themes.reduce((s, t) => s + t.codes.length, 0)}쌍), ` +
-      `상세 ${details.length}종목 (차트 있음 ${details.filter((d) => d.chart.length).length})` +
+      `상세 ${details.length}종목 (차트 ${details.filter((d) => d.chart.length).length} / 호가 ${details.filter((d) => d.book).length})` +
       ` — ${((Date.now() - started) / 1000).toFixed(1)}초`,
   );
 }
